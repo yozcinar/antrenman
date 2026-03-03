@@ -95,6 +95,30 @@
   .workout-header { padding: 0 20px 16px; display: flex; justify-content: space-between; align-items: flex-end; }
   .workout-title { font-family: 'Bebas Neue', sans-serif; font-size: 28px; letter-spacing: 1px; line-height: 1; }
   .workout-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .title-row { display: flex; align-items: baseline; gap: 8px; }
+  .edit-day-btn { background: none; border: none; color: var(--muted); font-size: 15px; cursor: pointer; padding: 0; line-height: 1; flex-shrink: 0; }
+  .edit-day-btn:active { color: var(--accent); }
+  .day-name-input {
+    background: var(--surface); border: 1px solid var(--accent);
+    border-radius: 8px; padding: 6px 10px; color: var(--text);
+    font-family: 'Bebas Neue', sans-serif; font-size: 24px;
+    width: 100%; letter-spacing: 1px; -webkit-appearance: none;
+  }
+  .day-name-input:focus { outline: none; }
+  .day-sub-input {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 10px; color: var(--text);
+    font-family: 'DM Sans', sans-serif; font-size: 13px;
+    width: 100%; margin-top: 6px; -webkit-appearance: none;
+  }
+  .day-sub-input:focus { outline: none; border-color: var(--accent); }
+  .day-edit-actions { display: flex; gap: 8px; margin-top: 8px; }
+  .day-edit-actions button {
+    padding: 7px 16px; border-radius: 8px; border: none;
+    font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .day-edit-actions .ok { background: var(--accent); color: #000; }
+  .day-edit-actions .cancel { background: var(--border); color: var(--text); }
   .progress-ring { position: relative; width: 52px; height: 52px; }
   .progress-ring svg { transform: rotate(-90deg); }
   .progress-ring-text {
@@ -622,7 +646,7 @@ function loadUserData(uid) {
   return JSON.parse(localStorage.getItem('gym_' + uid) || 'null') || {
     currentWeek: 1, currentDay: 1, weeks: {},
     metrics: { height: null, weightLog: [] },
-    custom: {}
+    custom: {}, dayNames: {}
   };
 }
 function saveData() { localStorage.setItem('gym_' + profiles.currentId, JSON.stringify(st)); }
@@ -631,9 +655,15 @@ let profiles = loadProfiles();
 
 // Init default user
 if (!profiles.users.length) {
-  const u = { id: '1', name: 'Yusuf', color: COLORS[0], created: Date.now() };
+  const u = { id: '1', name: 'Yusuf', color: COLORS[0], created: Date.now(), useBaseProgram: true };
   profiles.users.push(u);
   profiles.currentId = u.id;
+  saveProfiles();
+}
+
+// Migrasyon: eski kayıtlarda useBaseProgram yoksa ekle (id '1' = Yusuf)
+if (profiles.users[0]?.id === '1' && !profiles.users[0].useBaseProgram) {
+  profiles.users[0].useBaseProgram = true;
   saveProfiles();
 }
 if (!profiles.currentId) { profiles.currentId = profiles.users[0].id; saveProfiles(); }
@@ -663,10 +693,17 @@ function dayData(w, d) { const wd = weekData(w); if (!wd[d]) wd[d] = { completed
 function exData(w, d, i) { const dd = dayData(w,d); if (!dd.exercises[i]) dd.exercises[i] = {done:false,sets:{}}; return dd.exercises[i]; }
 
 function dayProgram(d) {
-  const base = BASE_PROGRAM[d];
-  if (!base) return null;
+  const useBase = !!me().useBaseProgram;
+  const base = useBase ? BASE_PROGRAM[d] : null;
   const cust = st.custom[d] || [];
-  return { name: base.name, sub: base.sub, exercises: [...base.exercises, ...cust.map(c => ({...c, isCustom:true}))] };
+  const dn = (st.dayNames || {})[d] || {};
+  // Null = rest/empty day
+  if (!base && cust.length === 0 && !dn.name) return null;
+  return {
+    name: dn.name || base?.name || '',
+    sub: dn.sub || base?.sub || '',
+    exercises: [...(base?.exercises || []), ...cust.map(c => ({...c, isCustom:true}))]
+  };
 }
 
 // ============================================================
@@ -736,8 +773,23 @@ function renderDayTabs() {
   for (let d = 1; d <= 7; d++) {
     const el = document.createElement('div');
     el.className = 'day-tab' + (d === st.currentDay ? ' active' : '') + (wd[d]?.completed ? ' completed' : '');
+    const useBase = !!me().useBaseProgram;
     const p = BASE_PROGRAM[d];
-    el.innerHTML = `<div class="day-label">${labels[d]}</div><div class="day-name">${p ? p.name.split(' ')[0] : (d===6?'AKTİF':'DİN')}</div><div class="day-dot"></div>`;
+    const dn = (st.dayNames || {})[d] || {};
+    const hasCust = (st.custom[d] || []).length > 0;
+    let dname;
+    if (dn.name) {
+      dname = dn.name.split(' ')[0];
+    } else if (useBase && p) {
+      dname = p.name.split(' ')[0];
+    } else if (useBase && !p) {
+      dname = d === 6 ? 'AKTİF' : 'DİN';
+    } else if (hasCust) {
+      dname = 'AKT';
+    } else {
+      dname = '—';
+    }
+    el.innerHTML = `<div class="day-label">${labels[d]}</div><div class="day-name">${dname}</div><div class="day-dot"></div>`;
     el.onclick = () => { st.currentDay = d; saveData(); renderWorkout(); renderDayTabs(); };
     tabs.appendChild(el);
   }
@@ -753,6 +805,21 @@ function renderWorkout() {
   const user = me();
 
   if (!prog) {
+    const useBase = !!me().useBaseProgram;
+    if (!useBase) {
+      // Yeni kullanıcı — boş gün, setup prompt göster
+      content.innerHTML = `
+        <div class="rest-day">
+          <div class="rest-icon">📋</div>
+          <div class="rest-title">BOŞ GÜN</div>
+          <div class="rest-sub">Bu güne henüz egzersiz eklemedin.</div>
+        </div>
+        <button class="add-ex-btn" style="margin-top:0;" onclick="openAddEx()">+ Egzersiz Ekle</button>
+        <div style="height:20px;"></div>
+      `;
+      return;
+    }
+    // Yusuf'un dinlenme günleri
     const msgs = {
       3: ['🧘','DİNLENME','Bugün kaslarını dinlendir. Aktif toparlanma.'],
       6: ['🚴','AKTİF DİNLENME','30-45 dk yürüyüş veya bisiklet.'],
@@ -771,8 +838,11 @@ function renderWorkout() {
 
   content.innerHTML = `
     <div class="workout-header">
-      <div>
-        <div class="workout-title">${prog.name}</div>
+      <div id="dayTitleArea">
+        <div class="title-row">
+          <div class="workout-title">${prog.name}</div>
+          <button class="edit-day-btn" onclick="editDayName()">✏</button>
+        </div>
         <div class="workout-sub">${prog.sub} · ${total} egzersiz</div>
       </div>
       <div class="progress-ring">
@@ -1106,6 +1176,40 @@ function toast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ============================================================
+// DAY NAME EDIT
+// ============================================================
+function editDayName() {
+  const d = st.currentDay;
+  const prog = dayProgram(d);
+  const area = document.getElementById('dayTitleArea');
+  area.innerHTML = `
+    <input class="day-name-input" id="editNameIn" type="text" value="${prog.name}" placeholder="Antrenman adı" maxlength="20">
+    <input class="day-sub-input" id="editSubIn" type="text" value="${(st.dayNames||{})[d]?.sub || BASE_PROGRAM[d]?.sub || ''}" placeholder="Alt başlık" maxlength="30">
+    <div class="day-edit-actions">
+      <button class="ok" onclick="saveDayName()">Kaydet</button>
+      <button class="cancel" onclick="renderWorkout()">İptal</button>
+    </div>
+  `;
+  document.getElementById('editNameIn').focus();
+  document.getElementById('editNameIn').select();
+}
+
+function saveDayName() {
+  const d = st.currentDay;
+  const name = document.getElementById('editNameIn').value.trim();
+  const sub = document.getElementById('editSubIn').value.trim();
+  if (!st.dayNames) st.dayNames = {};
+  st.dayNames[d] = {
+    name: name || BASE_PROGRAM[d]?.name || '',
+    sub: sub || BASE_PROGRAM[d]?.sub || ''
+  };
+  saveData();
+  renderWorkout();
+  renderDayTabs();
+  toast('✓ Kaydedildi');
 }
 
 // ============================================================
