@@ -524,6 +524,24 @@
   </div>
 </div>
 
+<!-- ====== FIRST LAUNCH MODAL ====== -->
+<div class="overlay open" id="firstLaunchOverlay" style="display:none;align-items:center;justify-content:center;">
+  <div class="sheet" style="border-radius:24px;max-width:360px;margin:20px;">
+    <div style="padding:32px 24px 8px;text-align:center;">
+      <div style="font-size:48px;margin-bottom:12px;">🏋️</div>
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:2px;color:var(--accent);">HOŞ GELDİN</div>
+      <div style="font-size:14px;color:var(--muted);margin-top:6px;margin-bottom:20px;">Başlamak için bir isim gir</div>
+      <input class="form-input" id="firstLaunchName" type="text" placeholder="İsmin..." maxlength="20"
+        style="text-align:center;font-size:18px;padding:14px;"
+        onkeydown="if(event.key==='Enter')firstLaunchSave()">
+      <div class="color-row" id="firstLaunchColors" style="justify-content:center;margin-top:16px;margin-bottom:8px;"></div>
+    </div>
+    <div class="sheet-footer">
+      <button class="sheet-btn primary" onclick="firstLaunchSave()">BAŞLA</button>
+    </div>
+  </div>
+</div>
+
 <!-- ====== ADD USER MODAL ====== -->
 <div class="overlay" id="addUserOverlay" onclick="closeAddUser(event)">
   <div class="sheet">
@@ -653,20 +671,13 @@ function saveData() { localStorage.setItem('gym_' + profiles.currentId, JSON.str
 
 let profiles = loadProfiles();
 
-// Init default user
+// İlk açılışta: isim sor
 if (!profiles.users.length) {
-  const u = { id: '1', name: 'Yusuf', color: COLORS[0], created: Date.now(), useBaseProgram: true };
-  profiles.users.push(u);
-  profiles.currentId = u.id;
-  saveProfiles();
+  // Kullanıcı ismi girilene kadar bekle — openFirstLaunch() çağrılır
 }
-
-// Migrasyon: eski kayıtlarda useBaseProgram yoksa ekle (id '1' = Yusuf)
-if (profiles.users[0]?.id === '1' && !profiles.users[0].useBaseProgram) {
-  profiles.users[0].useBaseProgram = true;
-  saveProfiles();
+if (!profiles.currentId && profiles.users.length) {
+  profiles.currentId = profiles.users[0].id; saveProfiles();
 }
-if (!profiles.currentId) { profiles.currentId = profiles.users[0].id; saveProfiles(); }
 
 let st = loadUserData(profiles.currentId);
 
@@ -693,16 +704,13 @@ function dayData(w, d) { const wd = weekData(w); if (!wd[d]) wd[d] = { completed
 function exData(w, d, i) { const dd = dayData(w,d); if (!dd.exercises[i]) dd.exercises[i] = {done:false,sets:{}}; return dd.exercises[i]; }
 
 function dayProgram(d) {
-  const useBase = !!me().useBaseProgram;
-  const base = useBase ? BASE_PROGRAM[d] : null;
   const cust = st.custom[d] || [];
   const dn = (st.dayNames || {})[d] || {};
-  // Null = rest/empty day
-  if (!base && cust.length === 0 && !dn.name) return null;
+  if (cust.length === 0 && !dn.name) return null;
   return {
-    name: dn.name || base?.name || '',
-    sub: dn.sub || base?.sub || '',
-    exercises: [...(base?.exercises || []), ...cust.map(c => ({...c, isCustom:true}))]
+    name: dn.name || '',
+    sub: dn.sub || '',
+    exercises: cust.map(c => ({...c, isCustom:true}))
   };
 }
 
@@ -773,22 +781,9 @@ function renderDayTabs() {
   for (let d = 1; d <= 7; d++) {
     const el = document.createElement('div');
     el.className = 'day-tab' + (d === st.currentDay ? ' active' : '') + (wd[d]?.completed ? ' completed' : '');
-    const useBase = !!me().useBaseProgram;
-    const p = BASE_PROGRAM[d];
     const dn = (st.dayNames || {})[d] || {};
     const hasCust = (st.custom[d] || []).length > 0;
-    let dname;
-    if (dn.name) {
-      dname = dn.name.split(' ')[0];
-    } else if (useBase && p) {
-      dname = p.name.split(' ')[0];
-    } else if (useBase && !p) {
-      dname = d === 6 ? 'AKTİF' : 'DİN';
-    } else if (hasCust) {
-      dname = 'AKT';
-    } else {
-      dname = '—';
-    }
+    const dname = dn.name ? dn.name.split(' ')[0] : (hasCust ? 'AKT' : '—');
     el.innerHTML = `<div class="day-label">${labels[d]}</div><div class="day-name">${dname}</div><div class="day-dot"></div>`;
     el.onclick = () => { st.currentDay = d; saveData(); renderWorkout(); renderDayTabs(); };
     tabs.appendChild(el);
@@ -805,28 +800,15 @@ function renderWorkout() {
   const user = me();
 
   if (!prog) {
-    const useBase = !!me().useBaseProgram;
-    if (!useBase) {
-      // Yeni kullanıcı — boş gün, setup prompt göster
-      content.innerHTML = `
-        <div class="rest-day">
-          <div class="rest-icon">📋</div>
-          <div class="rest-title">BOŞ GÜN</div>
-          <div class="rest-sub">Bu güne henüz egzersiz eklemedin.</div>
-        </div>
-        <button class="add-ex-btn" style="margin-top:0;" onclick="openAddEx()">+ Egzersiz Ekle</button>
-        <div style="height:20px;"></div>
-      `;
-      return;
-    }
-    // Yusuf'un dinlenme günleri
-    const msgs = {
-      3: ['🧘','DİNLENME','Bugün kaslarını dinlendir. Aktif toparlanma.'],
-      6: ['🚴','AKTİF DİNLENME','30-45 dk yürüyüş veya bisiklet.'],
-      7: ['😴','TAM DİNLENME','Uyu, ye, iyi hisset. Yarın güçlü dön.']
-    };
-    const m = msgs[d] || ['🏖️','DİNLENME',''];
-    content.innerHTML = `<div class="rest-day"><div class="rest-icon">${m[0]}</div><div class="rest-title">${m[1]}</div><div class="rest-sub">${m[2]}</div></div>`;
+    content.innerHTML = `
+      <div class="rest-day">
+        <div class="rest-icon">📋</div>
+        <div class="rest-title">BOŞ GÜN</div>
+        <div class="rest-sub">Bu güne henüz egzersiz eklemedin.</div>
+      </div>
+      <button class="add-ex-btn" style="margin-top:0;" onclick="openAddEx()">+ Egzersiz Ekle</button>
+      <div style="height:20px;"></div>
+    `;
     return;
   }
 
@@ -1219,8 +1201,50 @@ function render() {
   renderHeader(); renderWeekNav(); renderStats(); renderDayTabs(); renderWorkout();
 }
 
-setAccent(me().color);
-render();
+// ============================================================
+// FIRST LAUNCH
+// ============================================================
+let firstLaunchPickedColor = COLORS[0];
+
+function initFirstLaunch() {
+  const overlay = document.getElementById('firstLaunchOverlay');
+  overlay.style.display = 'flex';
+  firstLaunchPickedColor = COLORS[Math.floor(Math.random() * COLORS.length)];
+  const row = document.getElementById('firstLaunchColors');
+  row.innerHTML = '';
+  COLORS.forEach(c => {
+    const d = document.createElement('div');
+    d.className = 'color-dot' + (c === firstLaunchPickedColor ? ' picked' : '');
+    d.style.background = c;
+    d.onclick = () => {
+      firstLaunchPickedColor = c;
+      document.querySelectorAll('#firstLaunchColors .color-dot').forEach(x => x.classList.remove('picked'));
+      d.classList.add('picked');
+    };
+    row.appendChild(d);
+  });
+  setTimeout(() => document.getElementById('firstLaunchName').focus(), 300);
+}
+
+function firstLaunchSave() {
+  const name = document.getElementById('firstLaunchName').value.trim();
+  if (!name) { document.getElementById('firstLaunchName').focus(); return; }
+  const u = { id: Date.now().toString(), name, color: firstLaunchPickedColor, created: Date.now() };
+  profiles.users.push(u);
+  profiles.currentId = u.id;
+  saveProfiles();
+  st = loadUserData(u.id);
+  document.getElementById('firstLaunchOverlay').style.display = 'none';
+  setAccent(u.color);
+  render();
+}
+
+if (!profiles.users.length) {
+  initFirstLaunch();
+} else {
+  setAccent(me().color);
+  render();
+}
 </script>
 </body>
 </html>
